@@ -12,8 +12,11 @@
 // ================ Macros ================
 #define SDA_PIN 8
 #define SCL_PIN 9
-#define BUTTON1_PIN  2
-#define BUTTON2_PIN  3
+#define WINDOW_BUTTON_PIN  2
+#define FAN_BUTTON_PIN  3
+#define SENSOR_TIMER_INTERVAL 1000000
+#define MESSAGE_TIMER_INTERVAL 1000000
+#define DEBOUNCE_DELAY 200
 
 // Generate random Service and Characteristic UUIDs: https://www.uuidgenerator.net/
 #define SERVICE_UUID        "2405162b-b220-47e6-a767-cc5d9437ccea"
@@ -21,8 +24,10 @@
 
 // ============= Global Variables ============
 LiquidCrystal_I2C lcd(0x27, 16, 2); 
-esp_timer_handle_t periodic_timer;
-const unsigned long debounceDelay = 200; 
+esp_timer_handle_t sensor_timer;
+esp_timer_handle_t message_timer;
+volatile unsigned long lastWindowInterruptTime = 0;
+volatile unsigned long lastFanInterruptTime = 0;
 
 
 // ================ Functions ================
@@ -35,6 +40,28 @@ class MyCallbacks: public BLECharacteristicCallbacks {
     //		     will trigger the message to the LCD.
   }
 };
+
+
+void IRAM_ATTR handleWindowButtonInterrupt() { 
+  if (millis() - lastWindowInterruptTime >= DEBOUNCE_DELAY) {
+
+  }
+}
+
+void IRAM_ATTR handleFanButtonInterrupt() { 
+  if (millis() - lastFanInterruptTime >= DEBOUNCE_DELAY) {
+
+  }
+}
+
+
+void IRAM_ATTR sensorTimerInterrupt(void* arg) {
+  // Call xTaskNotify() to notify sensor value reading
+}
+
+void IRAM_ATTR messageTimerInterrupt(void* arg) {
+  // Call xTaskNotify() to notify sensor value reading
+}
 
 
 void setup() {
@@ -61,17 +88,30 @@ void setup() {
   Wire.begin();
   lcd.init();
 
-  // TIMER
-  esp_timer_create_args_t timer_args = {
-    .callback = &timerInterrupt,
-    .name = "my_timer"
+  // SENSOR TIMER
+  esp_timer_create_args_t sensor_timer_args = {
+    .callback = &sensorTimerInterrupt,
+    .name = "sensor_timer"
   };
-  esp_timer_create(&timer_args, &periodic_timer);
-  esp_timer_start_periodic(periodic_timer, TIMER_INTERVAL);
+  esp_timer_create(&sensor_timer_args, &sensor_timer);
+  esp_timer_start_periodic(sensor_timer, SENSOR_TIMER_INTERVAL);
+
+  // MESSAGE TIMER
+    esp_timer_create_args_t message_timer_args = {
+    .callback = &messageTimerInterrupt,
+    .name = "message_timer"
+  };
+  esp_timer_create(&message_timer_args, &message_timer);
+  esp_timer_start_periodic(message_timer, MESSAGE_TIMER_INTERVAL);
 
   // BUTTON1
-  pinMode(BUTTON1_PIN, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(BUTTON1_PIN), &handleButtonInterrupt, FALLING);
+  pinMode(WINDOW_BUTTON_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(WINDOW_BUTTON_PIN), &handleWindowButtonInterrupt, FALLING);
+
+  // BUTTON2
+  pinMode(FAN_BUTTON_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(FAN_BUTTON_PIN), &handleFanButtonInterrupt, FALLING);
+  
 
 }
 
