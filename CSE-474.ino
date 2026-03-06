@@ -28,18 +28,18 @@
 #define SOUND_PIN 18
 #define MOTION_PIN 27
 #define HEAT_THRESHOLD 85
-#define TEMP_LIMIT 90
-#define HUMIDITY_LIMIT 100 
+#define TEMP_LIMIT 82
+#define HUMIDITY_LIMIT 70
 
 // Stepper motor
-#define IN1 8
-#define IN2 9
+#define IN1 13
+#define IN2 12
 #define IN3 10
 #define IN4 11
 
 // Servo motor
 #define SERVO_POWER_PIN 5
-#define SERVO_PIN A5
+#define SERVO_PIN 16
 #define WINDOW_OPEN 90
 #define WINDOW_CLOSE 0
 
@@ -58,9 +58,9 @@ enum SensorType {
 typedef struct {
   float temp;
   float humidity;
-  int water;
-  int sound;
-  int motion;
+  float water;
+  float sound;
+  float motion;
 } SensorData;
 
 typedef struct {
@@ -81,9 +81,12 @@ TaskHandle_t sensorTaskHandle = nullptr;
 TaskHandle_t messageTaskHandle = nullptr;
 TaskHandle_t buzzerTaskHandle = nullptr;
 QueueHandle_t lcd_queue = nullptr;
+SemaphoreHandle_t xSemaphore = nullptr;
 
 SensorData sensor_values;
-SemaphoreHandle_t xSemaphore;
+SensorData sensor_avg;
+int sample_size = 0;
+BLECharacteristic *pCharacteristic = nullptr;
 
 bool fan_mode = false; // False is auto mode
 bool fan = false;
@@ -93,6 +96,8 @@ bool window = false;
 int stepIndex = 0;   
 Servo windowServo; 
 
+
+
 // ================ Prototypes ================
 void sensorTask(void* pvParameters);
 void messageTask(void* pvParameters);
@@ -101,20 +106,10 @@ void fanTask(void* pvParameters);
 void windowTask(void* pvParameters);
 void lcdTask(void* pvParameters);
 void stepMotor(int steps);
+void findMovingAverage(SensorData data);
 
 
 // ================ Functions ================
-class MyCallbacks: public BLECharacteristicCallbacks {
-  // Name: onWrite
-  // Description: sets flags to display a BLE message on the LCD and pause the timer updates
-  void onWrite(BLECharacteristic *pCharacteristic) {
-    // =========> TODO: This callback function will be invoked when signal is
-    // 		     received over BLE. Implement the necessary functionality that
-    //		     will trigger the message to the LCD.
-  }
-};
-
-
 void IRAM_ATTR handleWindowButtonInterrupt() { 
   if (millis() - lastWindowInterruptTime >= DEBOUNCE_DELAY) {
     if (!window_mode) {
@@ -162,8 +157,6 @@ void setup() {
                                           BLECharacteristic::PROPERTY_WRITE
                                         );
 
-
-  pCharacteristic->setCallbacks(new MyCallbacks());
   pService->start();
   BLEAdvertising *pAdvertising = pServer->getAdvertising();
   pAdvertising->start();
@@ -175,7 +168,7 @@ void setup() {
   lcd.clear();
   
   // Semaphore
-  xSemaphore = xSemaphoreCreateBinary();
+  xSemaphore = xSemaphoreCreateMutex();
   xSemaphoreGive(xSemaphore); 
 
   // Sensors
@@ -184,6 +177,19 @@ void setup() {
   pinMode(SOUND_PIN, INPUT);
   pinMode(MOTION_PIN, INPUT);
   dht.begin();
+
+  sensor_values.humidity = 0;
+  sensor_values.motion = 0;
+  sensor_values.sound = 0;
+  sensor_values.temp = 0;
+  sensor_values.water = 0;
+
+  sensor_avg.humidity = 0;
+  sensor_avg.motion = 0;
+  sensor_avg.sound = 0;
+  sensor_avg.temp = 0;
+  sensor_avg.water = 0;
+
 
   // Stepper motor
   pinMode(IN1, OUTPUT);
@@ -234,11 +240,6 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(FAN_BUTTON_PIN), &handleFanButtonInterrupt, FALLING);
 }
 
-void loop() {
-  // FreeRTOS handles everything
-
-}
-
 void sensorTask(void* pvParameters){
   SensorData local;
   while(1){
@@ -256,6 +257,7 @@ void sensorTask(void* pvParameters){
 
     if (xSemaphoreTake(xSemaphore, portMAX_DELAY) == pdTRUE) {
       sensor_values = local;
+      findMovingAverage(local);
       xSemaphoreGive(xSemaphore);
     }
     
@@ -283,16 +285,45 @@ void sensorTask(void* pvParameters){
     data.type = MOTION;
     data.value = local.motion;
     xQueueSend(lcd_queue, &data, portMAX_DELAY); 
-    
   }
 }
 
 void messageTask(void* pvParameters){
+  SensorData avg;
   while(1) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    // TODO
-  }
+    if (xSemaphoreTake(xSemaphore, portMAX_DELAY) == pdTRUE) {
+      avg = sensor_avg;
+      xSemaphoreGive(xSemaphore);
+    }
 
+    String msg = "Temp: " + String(avg.temp, 1) +
+                 ", Humidity: " + String(avg.humidity, 1) +
+                 ", Water: " + String(avg.water, 1) +
+                 ", Sound: " + String(avg.sound, 1) +
+                 ", Motion: " + String(avg.motion);
+
+    pCharacteristic->setValue(msg.c_str());
+    pCharacteristic->notify();
+  }
+}
+
+void findMovingAverage(SensorData data) {
+  if (sample_size == 0) {
+    sensor_avg = data;
+    sample_size = 1;
+  } else {
+    sensor_avg.temp = (sensor_avg.temp * sample_size + data.temp) / (sample_size + 1);
+    sensor_avg.humidity = (sensor_avg.humidity * sample_size + data.humidity) / (sample_size + 1);
+    sensor_avg.water = (sensor_avg.water * sample_size + data.water) / (sample_size + 1);
+    if ((sensor_avg.motion * sample_size + data.motion) / (sample_size + 1) >= 0.5) {
+      sensor_avg.motion = 1;
+    } else {
+      sensor_avg.motion = 0;
+    }
+    sensor_avg.sound = (sensor_avg.sound * sample_size + data.sound) / (sample_size + 1);
+    sample_size++;
+  }
 }
 
 void windowTask(void* pvParameters){
@@ -413,14 +444,16 @@ void lcdTask(void* pvParameters){
   }
 }
 
-SensorData findMovingAverage(SensorData data) {
-  // TODO
-}
 
 void buzzerTask(void* pvParameters){
   while(1){
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     // TODO
   }
+}
+
+void loop() {
+  // FreeRTOS handles everything
+
 }
 
