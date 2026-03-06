@@ -16,14 +16,14 @@
 #define WINDOW_BUTTON_PIN  2
 #define FAN_BUTTON_PIN  3
 #define SENSOR_TIMER_INTERVAL 1000000
-#define MESSAGE_TIMER_INTERVAL 1000000
+#define MESSAGE_TIMER_INTERVAL 100000000
 #define DEBOUNCE_DELAY 200
 
 //sensors
 #define DHT11_PIN 4
 #define DHTTYPE DHT11
-#define WATER_POWER_PIN 36
-#define WATER_SIGNAL_PIN 17
+#define WATER_POWER_PIN 17
+#define WATER_SIGNAL_PIN 36
 #define SOUND_PIN 18
 #define MOTION_PIN 27
 #define HEAT_THRESHOLD 85.0
@@ -34,6 +34,14 @@
 #define CHARACTERISTIC_UUID "6637ffbf-19f6-48f1-9609-888aa2951ceb"
 
 
+enum SensorType {
+    TEMP,
+    HUMIDITY,
+    WATER,
+    SOUND,
+    MOTION
+};
+
 typedef struct {
     float temp;
     float humidity;
@@ -42,6 +50,10 @@ typedef struct {
     int motion;
 } SensorData;
 
+typedef struct {
+    SensorType type;
+    float value;
+} LCDDisplay;
 
 
 // ============= Global Variables ============
@@ -53,11 +65,29 @@ volatile unsigned long lastFanInterruptTime = 0;
 
 DHT dht(DHT11_PIN, DHTTYPE);
 TaskHandle_t sensorTaskHandle = nullptr;
-QueueHandle_t queue = nullptr;
-bool buzzer = false;
+TaskHandle_t messageTaskHandle = nullptr;
+TaskHandle_t buzzerTaskHandle = nullptr;
+QueueHandle_t lcd_queue = nullptr;
+
+SensorData sensor_values;
+SemaphoreHandle_t xSemaphore;
+
+// False is auto mode
+bool fan_mode = false;
+bool fan = false;
+bool window_mode = false; 
+bool window = false;
+
 
 
 // ================ Functions ================
+void sensorTask(void* pvParameters);
+void messageTask(void* pvParameters);
+void buzzerTask(void* pvParameters);
+void fanTask(void* pvParameters);
+void windowTask(void* pvParameters);
+void lcdTask(void* pvParameters);
+
 class MyCallbacks: public BLECharacteristicCallbacks {
   // Name: onWrite
   // Description: sets flags to display a BLE message on the LCD and pause the timer updates
@@ -71,23 +101,36 @@ class MyCallbacks: public BLECharacteristicCallbacks {
 
 void IRAM_ATTR handleWindowButtonInterrupt() { 
   if (millis() - lastWindowInterruptTime >= DEBOUNCE_DELAY) {
-
+    if (!window_mode) {
+      window_mode = true;
+      window = !window;
+    } else {
+      window_mode = false;
+    }
+    lastWindowInterruptTime = millis();
   }
 }
 
 void IRAM_ATTR handleFanButtonInterrupt() { 
   if (millis() - lastFanInterruptTime >= DEBOUNCE_DELAY) {
-
+  
+  if (!fan_mode) {
+    fan_mode = true;
+    fan = !fan;
+  } else {
+    fan_mode = false;
+  }
+    lastFanInterruptTime = millis();
   }
 }
 
 
 void IRAM_ATTR sensorTimerInterrupt(void* arg) {
-  vTaskNotifyGive(sensorTaskHandle);
+  vTaskNotifyGiveFromISR(sensorTaskHandle, NULL);
 }
 
 void IRAM_ATTR messageTimerInterrupt(void* arg) {
-  // Call xTaskNotify() to notify sensor value reading
+  vTaskNotifyGiveFromISR(messageTaskHandle, NULL);
 }
 
 
@@ -114,6 +157,12 @@ void setup() {
   // LCD
   Wire.begin(SDA_PIN, SCL_PIN);
   lcd.init();
+  lcd.backlight();
+  lcd.clear();
+  
+  // Semaphore
+  xSemaphore = xSemaphoreCreateBinary();
+  xSemaphoreGive(xSemaphore); 
 
   // Sensors
   pinMode(WATER_POWER_PIN, OUTPUT);
@@ -122,11 +171,19 @@ void setup() {
   pinMode(MOTION_PIN, INPUT);
   dht.begin();
 
-  // Create Sensor Tasks
+  // Core 0
   xTaskCreatePinnedToCore(sensorTask, "TaskSensor", 4096, NULL, 1, &sensorTaskHandle, 0);
+  xTaskCreatePinnedToCore(buzzerTask, "TaskBuzzer", 4096, NULL, 1, &buzzerTaskHandle, 0);
+  xTaskCreatePinnedToCore(lcdTask, "TaskLCD", 4096, NULL, 1, NULL, 0);
+  
+  // Core 1
+  xTaskCreatePinnedToCore(messageTask, "TaskMessage", 4096, NULL, 1, &messageTaskHandle, 1);
+  xTaskCreatePinnedToCore(windowTask, "TaskWindow", 4096, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(fanTask, "TaskFan", 4096, NULL, 1, NULL, 1);
+
 
   // Queue
-  queue = xQueueCreate(3, sizeof(SensorData));
+  lcd_queue = xQueueCreate(10, sizeof(LCDDisplay));
 
 
   // SENSOR TIMER
@@ -161,33 +218,99 @@ void loop() {
 
 
 void sensorTask(void* pvParameters){
-  SensorData data;
-  
+  SensorData local;
   while(1){
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    vTaskDelay(pdMS_TO_TICKS(10));
+
     digitalWrite(WATER_POWER_PIN, HIGH);
-    data.water = analogRead(WATER_SIGNAL_PIN);
-    
+    vTaskDelay(pdMS_TO_TICKS(10));
+    local.water = analogRead(WATER_SIGNAL_PIN);
     digitalWrite(WATER_POWER_PIN, LOW);
-    data.humidity = dht.readHumidity();
-    data.temp= dht.readTemperature(true);
-    data.sound = digitalRead(SOUND_PIN);
-    data.motion = digitalRead(MOTION_PIN);
+
+    local.humidity = dht.readHumidity();
+    local.temp= dht.readTemperature(true);
+    local.sound = analogRead(SOUND_PIN);
+    local.motion = digitalRead(MOTION_PIN); // should just be 0 or 1
+
+    if (xSemaphoreTake(xSemaphore, portMAX_DELAY) == pdTRUE) {
+      sensor_values = local;
+      xSemaphoreGive(xSemaphore);
+    }
     
-    if (dht.computeHeatIndex(data.temp, data.humidity, true) > HEAT_THRESHOLD) {
-      buzzer = true;
+    if (dht.computeHeatIndex(local.temp, local.humidity, true) > HEAT_THRESHOLD) {
+      vTaskNotifyGive(buzzerTaskHandle);
     }
 
-    xQueueSend(queue, &data, portMAX_DELAY); 
+   
+    LCDDisplay data;
+    data.type = TEMP;
+    data.value = local.temp;
+    xQueueSend(lcd_queue, &data, portMAX_DELAY); 
+
+    data.type = HUMIDITY;
+    data.value = local.humidity;
+    xQueueSend(lcd_queue, &data, portMAX_DELAY); 
+
+    data.type = WATER;
+    data.value = local.water;
+    xQueueSend(lcd_queue, &data, portMAX_DELAY); 
+
+    data.type = SOUND;
+    data.value = local.sound;
+    xQueueSend(lcd_queue, &data, portMAX_DELAY); 
+
+    data.type = MOTION;
+    data.value = local.motion;
+    xQueueSend(lcd_queue, &data, portMAX_DELAY); 
+
+    
+    
   }
 }
 
+void messageTask(void* pvParameters){
+  while(1) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+  }
+
+}
+
+
+void windowTask(void* pvParameters){
+  while(1) {
+
+  }
+  vTaskDelay(pdMS_TO_TICKS(100));
+}
+
+
+void fanTask(void* pvParameters){
+  while(1) {
+
+  }
+  vTaskDelay(pdMS_TO_TICKS(100));
+}
+
+void lcdTask(void* pvParameters){
+  while(1) {
+    LCDDisplay receivedValue;
+    if (xQueueReceive(lcd_queue, &receivedValue, portMAX_DELAY) == pdTRUE){
+    
+    }
+  }
+
+}
+
+SensorData find_avg(SensorData data) {
+
+}
+
+
 void buzzerTask(void* pvParameters){
   while(1){
-    if (buzzer) {
-      // TODO
-    }
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    // TODO
   }
 }
 
