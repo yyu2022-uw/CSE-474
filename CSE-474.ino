@@ -22,16 +22,27 @@
 //sensors
 #define DHT11_PIN 4
 #define DHTTYPE DHT11
-#define WATER_POWER_PIN 17
-#define WATER_SIGNAL_PIN 36
+#define WATER_POWER_PIN 36
+#define WATER_SIGNAL_PIN 17
 #define SOUND_PIN 18
 #define MOTION_PIN 27
+#define HEAT_THRESHOLD 85.0
 
-DHT dht(DHT11_PIN, DHTTYPE);
 
 // Generate random Service and Characteristic UUIDs: https://www.uuidgenerator.net/
 #define SERVICE_UUID        "2405162b-b220-47e6-a767-cc5d9437ccea"
 #define CHARACTERISTIC_UUID "6637ffbf-19f6-48f1-9609-888aa2951ceb"
+
+
+typedef struct {
+    float temp;
+    float humidity;
+    int water;
+    int sound;
+    int motion;
+} SensorData;
+
+
 
 // ============= Global Variables ============
 LiquidCrystal_I2C lcd(0x27, 16, 2); 
@@ -40,10 +51,10 @@ esp_timer_handle_t message_timer;
 volatile unsigned long lastWindowInterruptTime = 0;
 volatile unsigned long lastFanInterruptTime = 0;
 
-TaskHandle_t heatTaskHandle = nullptr;
-TaskHandle_t waterTaskHandle = nullptr;
-TaskHandle_t soundTaskHandle = nullptr;
-TaskHandle_t motionTaskHandle = nullptr;
+DHT dht(DHT11_PIN, DHTTYPE);
+TaskHandle_t sensorTaskHandle = nullptr;
+QueueHandle_t queue = nullptr;
+bool buzzer = false;
 
 
 // ================ Functions ================
@@ -72,11 +83,7 @@ void IRAM_ATTR handleFanButtonInterrupt() {
 
 
 void IRAM_ATTR sensorTimerInterrupt(void* arg) {
-  // Call xTaskNotify() to notify sensor value reading
-    vTaskNotifyGive(heatTaskHandle);
-    vTaskNotifyGive(waterTaskHandle);
-    vTaskNotifyGive(soundTaskHandle);
-    vTaskNotifyGive(motionTaskHandle);
+  vTaskNotifyGive(sensorTaskHandle);
 }
 
 void IRAM_ATTR messageTimerInterrupt(void* arg) {
@@ -105,20 +112,22 @@ void setup() {
   pAdvertising->start();
 
   // LCD
-  Wire.begin();
+  Wire.begin(SDA_PIN, SCL_PIN);
   lcd.init();
 
   // Sensors
   pinMode(WATER_POWER_PIN, OUTPUT);
+  pinMode(WATER_SIGNAL_PIN, INPUT);
   pinMode(SOUND_PIN, INPUT);
   pinMode(MOTION_PIN, INPUT);
   dht.begin();
 
   // Create Sensor Tasks
-  xTaskCreatePinnedToCore(heatTask, "TaskHeat", 4096, NULL, 1, &heatTaskHandle, 0);
-  xTaskCreatePinnedToCore(waterTask, "TaskWater", 4096, NULL, 1, &waterTaskHandle, 0);
-  xTaskCreatePinnedToCore(soundTask, "TaskSound", 4096, NULL, 1, &soundTaskHandle, 0);
-  xTaskCreatePinnedToCore(motionTask, "TaskMotion", 4096, NULL, 1, &motionTaskHandle, 0);
+  xTaskCreatePinnedToCore(sensorTask, "TaskSensor", 4096, NULL, 1, &sensorTaskHandle, 0);
+
+  // Queue
+  queue = xQueueCreate(3, sizeof(SensorData));
+
 
   // SENSOR TIMER
   esp_timer_create_args_t sensor_timer_args = {
@@ -150,48 +159,35 @@ void loop() {
 
 }
 
-void waterTask(void* pvParameters){
+
+void sensorTask(void* pvParameters){
+  SensorData data;
+  
   while(1){
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    vTaskDelay(pdMS_TO_TICKS(10));
     digitalWrite(WATER_POWER_PIN, HIGH);
-    float value = analogRead(WATER_SIGNAL_PIN);
+    data.water = analogRead(WATER_SIGNAL_PIN);
+    
     digitalWrite(WATER_POWER_PIN, LOW);
+    data.humidity = dht.readHumidity();
+    data.temp= dht.readTemperature(true);
+    data.sound = digitalRead(SOUND_PIN);
+    data.motion = digitalRead(MOTION_PIN);
+    
+    if (dht.computeHeatIndex(data.temp, data.humidity, true) > HEAT_THRESHOLD) {
+      buzzer = true;
+    }
+
+    xQueueSend(queue, &data, portMAX_DELAY); 
   }
 }
 
-// void humdityTask(void* pvParameters){
-//   while(1){
-//     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-//     float h = dht.readHumidity();
-//   }
-// }
-
-// void tempTask(void* pvParameters){
-//   while(1){
-//     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-//     float t = dht.readTemperature(true);
-//   }
-// }
-
-void heatTask(void* pvParameters){
+void buzzerTask(void* pvParameters){
   while(1){
-    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    float h = dht.readHumidity();
-    float t = dht.readTemperature(true);
-    float hi = dht.computeHeatIndex(t, h);
+    if (buzzer) {
+      // TODO
+    }
   }
 }
 
-void soundTask(void* pvParameters){
-  while(1){
-    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    float s = digitalRead(SOUND_PIN);
-  }
-}
-
-void motionTask(void* pvParameters){
-  while(1){
-    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    float m = digitalRead(MOTION_PIN);
-  }
-}
