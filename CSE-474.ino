@@ -9,6 +9,7 @@
 #include <BLEServer.h>
 #include "esp_timer.h"
 #include <DHT.h>
+#include <ESP32Servo.h>
 
 // ================ Macros ================
 #define SDA_PIN 8
@@ -19,41 +20,53 @@
 #define MESSAGE_TIMER_INTERVAL 100000000
 #define DEBOUNCE_DELAY 200
 
-//sensors
+// Sensors
 #define DHT11_PIN 4
 #define DHTTYPE DHT11
 #define WATER_POWER_PIN 17
 #define WATER_SIGNAL_PIN 36
 #define SOUND_PIN 18
 #define MOTION_PIN 27
-#define HEAT_THRESHOLD 85.0
+#define HEAT_THRESHOLD 85
+#define TEMP_LIMIT 90
+#define HUMIDITY_LIMIT 100 
 
+// Stepper motor
+#define IN1 8
+#define IN2 9
+#define IN3 10
+#define IN4 11
+
+// Servo motor
+#define SERVO_POWER_PIN 5
+#define SERVO_PIN A5
+#define WINDOW_OPEN 90
+#define WINDOW_CLOSE 0
 
 // Generate random Service and Characteristic UUIDs: https://www.uuidgenerator.net/
 #define SERVICE_UUID        "2405162b-b220-47e6-a767-cc5d9437ccea"
 #define CHARACTERISTIC_UUID "6637ffbf-19f6-48f1-9609-888aa2951ceb"
 
-
 enum SensorType {
-    TEMP,
-    HUMIDITY,
-    WATER,
-    SOUND,
-    MOTION
+  TEMP,
+  HUMIDITY,
+  WATER,
+  SOUND,
+  MOTION
 };
 
 typedef struct {
-    float temp;
-    float humidity;
-    int water;
-    int sound;
-    int motion;
+  float temp;
+  float humidity;
+  int water;
+  int sound;
+  int motion;
 } SensorData;
 
 typedef struct {
-    SensorType type;
-    float value;
-} LCDDisplay;
+  SensorType type;
+  float value;
+} LCDValue;
 
 
 // ============= Global Variables ============
@@ -72,22 +85,25 @@ QueueHandle_t lcd_queue = nullptr;
 SensorData sensor_values;
 SemaphoreHandle_t xSemaphore;
 
-// False is auto mode
-bool fan_mode = false;
+bool fan_mode = false; // False is auto mode
 bool fan = false;
 bool window_mode = false; 
 bool window = false;
 
+int stepIndex = 0;   
+Servo windowServo; 
 
-
-// ================ Functions ================
+// ================ Prototypes ================
 void sensorTask(void* pvParameters);
 void messageTask(void* pvParameters);
 void buzzerTask(void* pvParameters);
 void fanTask(void* pvParameters);
 void windowTask(void* pvParameters);
 void lcdTask(void* pvParameters);
+void stepMotor(int steps);
 
+
+// ================ Functions ================
 class MyCallbacks: public BLECharacteristicCallbacks {
   // Name: onWrite
   // Description: sets flags to display a BLE message on the LCD and pause the timer updates
@@ -113,7 +129,6 @@ void IRAM_ATTR handleWindowButtonInterrupt() {
 
 void IRAM_ATTR handleFanButtonInterrupt() { 
   if (millis() - lastFanInterruptTime >= DEBOUNCE_DELAY) {
-  
   if (!fan_mode) {
     fan_mode = true;
     fan = !fan;
@@ -123,7 +138,6 @@ void IRAM_ATTR handleFanButtonInterrupt() {
     lastFanInterruptTime = millis();
   }
 }
-
 
 void IRAM_ATTR sensorTimerInterrupt(void* arg) {
   vTaskNotifyGiveFromISR(sensorTaskHandle, NULL);
@@ -171,6 +185,17 @@ void setup() {
   pinMode(MOTION_PIN, INPUT);
   dht.begin();
 
+  // Stepper motor
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
+
+  // Server motor
+  pinMode(SERVO_POWER_PIN, OUTPUT);
+  digitalWrite(SERVO_POWER_PIN, HIGH);
+  windowServo.attach(SERVO_PIN);
+
   // Core 0
   xTaskCreatePinnedToCore(sensorTask, "TaskSensor", 4096, NULL, 1, &sensorTaskHandle, 0);
   xTaskCreatePinnedToCore(buzzerTask, "TaskBuzzer", 4096, NULL, 1, &buzzerTaskHandle, 0);
@@ -181,12 +206,10 @@ void setup() {
   xTaskCreatePinnedToCore(windowTask, "TaskWindow", 4096, NULL, 1, NULL, 1);
   xTaskCreatePinnedToCore(fanTask, "TaskFan", 4096, NULL, 1, NULL, 1);
 
-
   // Queue
-  lcd_queue = xQueueCreate(10, sizeof(LCDDisplay));
+  lcd_queue = xQueueCreate(10, sizeof(LCDValue));
 
-
-  // SENSOR TIMER
+  // Sensor timer
   esp_timer_create_args_t sensor_timer_args = {
     .callback = &sensorTimerInterrupt,
     .name = "sensor_timer"
@@ -194,7 +217,7 @@ void setup() {
   esp_timer_create(&sensor_timer_args, &sensor_timer);
   esp_timer_start_periodic(sensor_timer, SENSOR_TIMER_INTERVAL);
 
-  // MESSAGE TIMER
+  // Message timer
     esp_timer_create_args_t message_timer_args = {
     .callback = &messageTimerInterrupt,
     .name = "message_timer"
@@ -202,11 +225,11 @@ void setup() {
   esp_timer_create(&message_timer_args, &message_timer);
   esp_timer_start_periodic(message_timer, MESSAGE_TIMER_INTERVAL);
 
-  // BUTTON1
+  // Window button
   pinMode(WINDOW_BUTTON_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(WINDOW_BUTTON_PIN), &handleWindowButtonInterrupt, FALLING);
 
-  // BUTTON2
+  // Fan button
   pinMode(FAN_BUTTON_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(FAN_BUTTON_PIN), &handleFanButtonInterrupt, FALLING);
 }
@@ -215,7 +238,6 @@ void loop() {
   // FreeRTOS handles everything
 
 }
-
 
 void sensorTask(void* pvParameters){
   SensorData local;
@@ -238,11 +260,10 @@ void sensorTask(void* pvParameters){
     }
     
     if (dht.computeHeatIndex(local.temp, local.humidity, true) > HEAT_THRESHOLD) {
-      vTaskNotifyGive(buzzerTaskHandle);
+      xTaskNotifyGive(buzzerTaskHandle);
     }
-
    
-    LCDDisplay data;
+    LCDValue data;
     data.type = TEMP;
     data.value = local.temp;
     xQueueSend(lcd_queue, &data, portMAX_DELAY); 
@@ -262,8 +283,6 @@ void sensorTask(void* pvParameters){
     data.type = MOTION;
     data.value = local.motion;
     xQueueSend(lcd_queue, &data, portMAX_DELAY); 
-
-    
     
   }
 }
@@ -271,41 +290,132 @@ void sensorTask(void* pvParameters){
 void messageTask(void* pvParameters){
   while(1) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-
+    // TODO
   }
 
 }
-
 
 void windowTask(void* pvParameters){
+  float curr_humidity;
   while(1) {
+    if (xSemaphoreTake(xSemaphore, portMAX_DELAY) == pdTRUE) {
+      curr_humidity = sensor_values.humidity;
+      xSemaphoreGive(xSemaphore);
+    }
 
+    if ((!window_mode && curr_humidity >= HUMIDITY_LIMIT) || window) {
+      windowServo.write(WINDOW_OPEN);
+    } else {
+      windowServo.write(WINDOW_CLOSE);
+    }
+    vTaskDelay(pdMS_TO_TICKS(100));
   }
-  vTaskDelay(pdMS_TO_TICKS(100));
 }
 
-
 void fanTask(void* pvParameters){
+  float curr_temp;
   while(1) {
+    if (xSemaphoreTake(xSemaphore, portMAX_DELAY) == pdTRUE) {
+      curr_temp = sensor_values.temp;
+      xSemaphoreGive(xSemaphore);
+    }
 
+    if ((!fan_mode && curr_temp >= TEMP_LIMIT) || fan) {
+      stepMotor(16);           
+    }
+    vTaskDelay(pdMS_TO_TICKS(1));
   }
-  vTaskDelay(pdMS_TO_TICKS(100));
+}
+
+void stepMotor(int steps) {
+
+  for (int i = 0; i < steps; i++) {
+
+    switch (stepIndex) {
+
+      case 0:
+        digitalWrite(IN1, LOW);
+        digitalWrite(IN2, LOW);
+        digitalWrite(IN3, LOW);
+        digitalWrite(IN4, HIGH);
+        break;
+
+      case 1:
+        digitalWrite(IN1, LOW);
+        digitalWrite(IN2, LOW);
+        digitalWrite(IN3, HIGH);
+        digitalWrite(IN4, HIGH);
+        break;
+
+      case 2:
+        digitalWrite(IN1, LOW);
+        digitalWrite(IN2, LOW);
+        digitalWrite(IN3, HIGH);
+        digitalWrite(IN4, LOW);
+        break;
+
+      case 3:
+        digitalWrite(IN1, LOW);
+        digitalWrite(IN2, HIGH);
+        digitalWrite(IN3, HIGH);
+        digitalWrite(IN4, LOW);
+        break;
+
+      case 4:
+        digitalWrite(IN1, LOW);
+        digitalWrite(IN2, HIGH);
+        digitalWrite(IN3, LOW);
+        digitalWrite(IN4, LOW);
+        break;
+
+      case 5:
+        digitalWrite(IN1, HIGH);
+        digitalWrite(IN2, HIGH);
+        digitalWrite(IN3, LOW);
+        digitalWrite(IN4, LOW);
+        break;
+
+      case 6:
+        digitalWrite(IN1, HIGH);
+        digitalWrite(IN2, LOW);
+        digitalWrite(IN3, LOW);
+        digitalWrite(IN4, LOW);
+        break;
+
+      case 7:
+        digitalWrite(IN1, HIGH);
+        digitalWrite(IN2, LOW);
+        digitalWrite(IN3, LOW);
+        digitalWrite(IN4, HIGH);
+        break;
+
+      default:
+        digitalWrite(IN1, LOW);
+        digitalWrite(IN2, LOW);
+        digitalWrite(IN3, LOW);
+        digitalWrite(IN4, LOW);
+        break;
+    }
+    stepIndex++;
+    if (stepIndex > 7) {
+      stepIndex = 0;
+    }
+    delayMicroseconds(800);
+  }
 }
 
 void lcdTask(void* pvParameters){
   while(1) {
-    LCDDisplay receivedValue;
+    LCDValue receivedValue;
     if (xQueueReceive(lcd_queue, &receivedValue, portMAX_DELAY) == pdTRUE){
-    
+      // TODO
     }
   }
-
 }
 
-SensorData find_avg(SensorData data) {
-
+SensorData findMovingAverage(SensorData data) {
+  // TODO
 }
-
 
 void buzzerTask(void* pvParameters){
   while(1){
