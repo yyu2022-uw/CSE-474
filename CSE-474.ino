@@ -31,6 +31,11 @@
 #define TEMP_LIMIT 82
 #define HUMIDITY_LIMIT 70
 
+// Buzzer
+#define BUZZER_PIN 15
+#define LEDC_RES 8
+#define LEDC_FREQ 2000
+
 // Stepper motor
 #define IN1 13
 #define IN2 12
@@ -190,7 +195,6 @@ void setup() {
   sensor_avg.temp = 0;
   sensor_avg.water = 0;
 
-
   // Stepper motor
   pinMode(IN1, OUTPUT);
   pinMode(IN2, OUTPUT);
@@ -201,6 +205,10 @@ void setup() {
   pinMode(SERVO_POWER_PIN, OUTPUT);
   digitalWrite(SERVO_POWER_PIN, HIGH);
   windowServo.attach(SERVO_PIN);
+
+  // Buzzer
+  ledcAttach(BUZZER_PIN, LEDC_FREQ, LEDC_RES);
+  ledcWrite(BUZZER_PIN, 0);
 
   // Core 0
   xTaskCreatePinnedToCore(sensorTask, "TaskSensor", 4096, NULL, 1, &sensorTaskHandle, 0);
@@ -439,7 +447,37 @@ void lcdTask(void* pvParameters){
   while(1) {
     LCDValue receivedValue;
     if (xQueueReceive(lcd_queue, &receivedValue, portMAX_DELAY) == pdTRUE){
-      // TODO
+      lcd.clear();
+      lcd.setCursor(0, 0);
+
+      switch (receivedValue.type) {
+        case TEMP:
+          lcd.print("Temp: "); 
+          lcd.print(receivedValue.value);      
+          lcd.print(" F");     
+          break;
+        case HUMIDITY:
+          lcd.print("Humidity: "); 
+          lcd.print(receivedValue.value);          
+          lcd.print(" %"); 
+          break;
+        case WATER:
+          lcd.print("Water: "); 
+          lcd.print(receivedValue.value);          
+          break;
+        case SOUND:
+          lcd.print("Sound: "); 
+          lcd.print(receivedValue.value);        
+          break;
+        case MOTION:
+          lcd.print("Motion: "); 
+          if (receivedValue.value >= 0.5){
+            lcd.print("Movement Detected");
+          } else{
+            lcd.print("No Movement");    
+          }      
+          break;
+      }
     }
   }
 }
@@ -448,7 +486,9 @@ void lcdTask(void* pvParameters){
 void buzzerTask(void* pvParameters){
   while(1){
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    // TODO
+    ledcWrite(BUZZER_PIN, 128);
+    vTaskDelay(pdMS_TO_TICKS(200));
+    ledcWrite(BUZZER_PIN, 0);
   }
 }
 
@@ -456,4 +496,3 @@ void loop() {
   // FreeRTOS handles everything
 
 }
-
