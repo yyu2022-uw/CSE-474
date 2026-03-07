@@ -155,12 +155,13 @@ void setup() {
   BLEDevice::init("MyESP32");
   BLEServer *pServer = BLEDevice::createServer();
   BLEService *pService = pServer->createService(SERVICE_UUID);
-  BLECharacteristic *pCharacteristic = pService->createCharacteristic(
+  pCharacteristic = pService->createCharacteristic(
                                           CHARACTERISTIC_UUID,
                                           BLECharacteristic::PROPERTY_READ |
                                           BLECharacteristic::PROPERTY_NOTIFY
                                         );
-
+ 
+  pCharacteristic->setValue("Starting...");
   pService->start();
   BLEAdvertising *pAdvertising = pServer->getAdvertising();
   pAdvertising->start();
@@ -211,21 +212,6 @@ void setup() {
   // Queue
   lcd_queue = xQueueCreate(10, sizeof(LCDValue));
 
-  // Sensor timer
-  esp_timer_create_args_t sensor_timer_args = {
-    .callback = &sensorTimerInterrupt,
-    .name = "sensor_timer"
-  };
-  esp_timer_create(&sensor_timer_args, &sensor_timer);
-  esp_timer_start_periodic(sensor_timer, SENSOR_TIMER_INTERVAL);
-
-  // Message timer
-    esp_timer_create_args_t message_timer_args = {
-    .callback = &messageTimerInterrupt,
-    .name = "message_timer"
-  };
-  esp_timer_create(&message_timer_args, &message_timer);
-  esp_timer_start_periodic(message_timer, MESSAGE_TIMER_INTERVAL);
 
   // Window button
   pinMode(WINDOW_BUTTON_PIN, INPUT_PULLUP);
@@ -244,6 +230,22 @@ void setup() {
   xTaskCreatePinnedToCore(messageTask, "TaskMessage", 4096, NULL, 1, &messageTaskHandle, 1);
   xTaskCreatePinnedToCore(windowTask, "TaskWindow", 4096, NULL, 1, NULL, 1);
   xTaskCreatePinnedToCore(fanTask, "TaskFan", 4096, NULL, 1, NULL, 1);
+
+  // Sensor timer
+  esp_timer_create_args_t sensor_timer_args = {
+    .callback = &sensorTimerInterrupt,
+    .name = "sensor_timer"
+  };
+  esp_timer_create(&sensor_timer_args, &sensor_timer);
+  esp_timer_start_periodic(sensor_timer, SENSOR_TIMER_INTERVAL);
+
+  // Message timer
+    esp_timer_create_args_t message_timer_args = {
+    .callback = &messageTimerInterrupt,
+    .name = "message_timer"
+  };
+  esp_timer_create(&message_timer_args, &message_timer);
+  esp_timer_start_periodic(message_timer, MESSAGE_TIMER_INTERVAL);
 
 }
 
