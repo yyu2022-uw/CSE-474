@@ -157,7 +157,7 @@ void setup() {
   BLECharacteristic *pCharacteristic = pService->createCharacteristic(
                                           CHARACTERISTIC_UUID,
                                           BLECharacteristic::PROPERTY_READ |
-                                          BLECharacteristic::PROPERTY_WRITE
+                                          BLECharacteristic::PROPERTY_NOTIFY
                                         );
 
   pService->start();
@@ -307,7 +307,7 @@ void messageTask(void* pvParameters){
                  ", Humidity: " + String(avg.humidity, 1) +
                  ", Water: " + String(avg.water, 1) +
                  ", Sound: " + String(avg.sound, 1) +
-                 ", Motion: " + String(avg.motion);
+                 ", Motion: " + String(avg.motion, 1);
 
     pCharacteristic->setValue(msg.c_str());
     pCharacteristic->notify();
