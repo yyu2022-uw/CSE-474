@@ -101,8 +101,6 @@ bool window = false;
 int stepIndex = 0;   
 Servo windowServo; 
 
-
-
 // ================ Prototypes ================
 void sensorTask(void* pvParameters);
 void messageTask(void* pvParameters);
@@ -367,11 +365,9 @@ void fanTask(void* pvParameters){
 }
 
 void stepMotor(int steps) {
-
   for (int i = 0; i < steps; i++) {
-
+    
     switch (stepIndex) {
-
       case 0:
         digitalWrite(IN1, LOW);
         digitalWrite(IN2, LOW);
@@ -479,6 +475,7 @@ void lcdTask(void* pvParameters){
           break;
       }
     }
+    vTaskDelay(pdMS_TO_TICKS(1000));
   }
 }
 
@@ -487,7 +484,7 @@ void buzzerTask(void* pvParameters){
   while(1){
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     ledcWrite(BUZZER_PIN, 128);
-    vTaskDelay(pdMS_TO_TICKS(200));
+    vTaskDelay(pdMS_TO_TICKS(1000));
     ledcWrite(BUZZER_PIN, 0);
   }
 }
