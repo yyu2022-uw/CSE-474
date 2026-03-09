@@ -43,7 +43,6 @@
 #define IN4 11
 
 // Servo motor
-#define SERVO_POWER_PIN 5
 #define SERVO_PIN 16
 #define WINDOW_OPEN 90
 #define WINDOW_CLOSE 0
@@ -201,8 +200,6 @@ void setup() {
   pinMode(IN4, OUTPUT);
 
   // Server motor
-  pinMode(SERVO_POWER_PIN, OUTPUT);
-  digitalWrite(SERVO_POWER_PIN, HIGH);
   windowServo.attach(SERVO_PIN);
 
   // Buzzer
@@ -211,7 +208,6 @@ void setup() {
 
   // Queue
   lcd_queue = xQueueCreate(10, sizeof(LCDValue));
-
 
   // Window button
   pinMode(WINDOW_BUTTON_PIN, INPUT_PULLUP);
