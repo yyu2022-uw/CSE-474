@@ -16,7 +16,7 @@
 #define SCL_PIN 9
 #define WINDOW_BUTTON_PIN  2
 #define FAN_BUTTON_PIN  3
-#define SENSOR_TIMER_INTERVAL 1000000
+#define SENSOR_TIMER_INTERVAL 3000000
 #define MESSAGE_TIMER_INTERVAL 100000000
 #define DEBOUNCE_DELAY 200
 
@@ -26,7 +26,7 @@
 #define WATER_POWER_PIN 17
 #define WATER_SIGNAL_PIN 36
 #define SOUND_PIN 18
-#define MOTION_PIN 27
+#define MOTION_PIN 5
 #define HEAT_THRESHOLD 85
 #define TEMP_LIMIT 82
 #define HUMIDITY_LIMIT 70
@@ -43,7 +43,6 @@
 #define IN4 11
 
 // Servo motor
-#define SERVO_POWER_PIN 5
 #define SERVO_PIN 16
 #define WINDOW_OPEN 90
 #define WINDOW_CLOSE 0
@@ -101,8 +100,6 @@ bool window = false;
 int stepIndex = 0;   
 Servo windowServo; 
 
-
-
 // ================ Prototypes ================
 void sensorTask(void* pvParameters);
 void messageTask(void* pvParameters);
@@ -151,17 +148,19 @@ void IRAM_ATTR messageTimerInterrupt(void* arg) {
 void setup() {
   // Serial
   Serial.begin(115200);
+  Serial.println("Begin");
 
   // BLE
   BLEDevice::init("MyESP32");
   BLEServer *pServer = BLEDevice::createServer();
   BLEService *pService = pServer->createService(SERVICE_UUID);
-  BLECharacteristic *pCharacteristic = pService->createCharacteristic(
+  pCharacteristic = pService->createCharacteristic(
                                           CHARACTERISTIC_UUID,
                                           BLECharacteristic::PROPERTY_READ |
-                                          BLECharacteristic::PROPERTY_WRITE
+                                          BLECharacteristic::PROPERTY_NOTIFY
                                         );
-
+ 
+  pCharacteristic->setValue("Starting...");
   pService->start();
   BLEAdvertising *pAdvertising = pServer->getAdvertising();
   pAdvertising->start();
@@ -174,7 +173,6 @@ void setup() {
   
   // Semaphore
   xSemaphore = xSemaphoreCreateMutex();
-  xSemaphoreGive(xSemaphore); 
 
   // Sensors
   pinMode(WATER_POWER_PIN, OUTPUT);
@@ -202,13 +200,22 @@ void setup() {
   pinMode(IN4, OUTPUT);
 
   // Server motor
-  pinMode(SERVO_POWER_PIN, OUTPUT);
-  digitalWrite(SERVO_POWER_PIN, HIGH);
   windowServo.attach(SERVO_PIN);
 
   // Buzzer
   ledcAttach(BUZZER_PIN, LEDC_FREQ, LEDC_RES);
   ledcWrite(BUZZER_PIN, 0);
+
+  // Queue
+  lcd_queue = xQueueCreate(10, sizeof(LCDValue));
+
+  // Window button
+  pinMode(WINDOW_BUTTON_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(WINDOW_BUTTON_PIN), &handleWindowButtonInterrupt, FALLING);
+
+  // Fan button
+  pinMode(FAN_BUTTON_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(FAN_BUTTON_PIN), &handleFanButtonInterrupt, FALLING);
 
   // Core 0
   xTaskCreatePinnedToCore(sensorTask, "TaskSensor", 4096, NULL, 1, &sensorTaskHandle, 0);
@@ -219,9 +226,6 @@ void setup() {
   xTaskCreatePinnedToCore(messageTask, "TaskMessage", 4096, NULL, 1, &messageTaskHandle, 1);
   xTaskCreatePinnedToCore(windowTask, "TaskWindow", 4096, NULL, 1, NULL, 1);
   xTaskCreatePinnedToCore(fanTask, "TaskFan", 4096, NULL, 1, NULL, 1);
-
-  // Queue
-  lcd_queue = xQueueCreate(10, sizeof(LCDValue));
 
   // Sensor timer
   esp_timer_create_args_t sensor_timer_args = {
@@ -239,16 +243,10 @@ void setup() {
   esp_timer_create(&message_timer_args, &message_timer);
   esp_timer_start_periodic(message_timer, MESSAGE_TIMER_INTERVAL);
 
-  // Window button
-  pinMode(WINDOW_BUTTON_PIN, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(WINDOW_BUTTON_PIN), &handleWindowButtonInterrupt, FALLING);
-
-  // Fan button
-  pinMode(FAN_BUTTON_PIN, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(FAN_BUTTON_PIN), &handleFanButtonInterrupt, FALLING);
 }
 
 void sensorTask(void* pvParameters){
+  Serial.println("IN SENSORTASK");
   SensorData local;
   while(1){
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -260,7 +258,7 @@ void sensorTask(void* pvParameters){
 
     local.humidity = dht.readHumidity();
     local.temp= dht.readTemperature(true);
-    local.sound = analogRead(SOUND_PIN);
+    local.sound = digitalRead(SOUND_PIN);
     local.motion = digitalRead(MOTION_PIN); // should just be 0 or 1
 
     if (xSemaphoreTake(xSemaphore, portMAX_DELAY) == pdTRUE) {
@@ -297,6 +295,7 @@ void sensorTask(void* pvParameters){
 }
 
 void messageTask(void* pvParameters){
+  Serial.println("IN MESSAGE TASK");
   SensorData avg;
   while(1) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -309,7 +308,7 @@ void messageTask(void* pvParameters){
                  ", Humidity: " + String(avg.humidity, 1) +
                  ", Water: " + String(avg.water, 1) +
                  ", Sound: " + String(avg.sound, 1) +
-                 ", Motion: " + String(avg.motion);
+                 ", Motion: " + String(avg.motion, 1);
 
     pCharacteristic->setValue(msg.c_str());
     pCharacteristic->notify();
@@ -335,6 +334,7 @@ void findMovingAverage(SensorData data) {
 }
 
 void windowTask(void* pvParameters){
+  Serial.println("IN WINDOW TASK");
   float curr_humidity;
   while(1) {
     if (xSemaphoreTake(xSemaphore, portMAX_DELAY) == pdTRUE) {
@@ -352,6 +352,7 @@ void windowTask(void* pvParameters){
 }
 
 void fanTask(void* pvParameters){
+  Serial.println("IN FAN TASK");
   float curr_temp;
   while(1) {
     if (xSemaphoreTake(xSemaphore, portMAX_DELAY) == pdTRUE) {
@@ -367,11 +368,9 @@ void fanTask(void* pvParameters){
 }
 
 void stepMotor(int steps) {
-
   for (int i = 0; i < steps; i++) {
-
+    
     switch (stepIndex) {
-
       case 0:
         digitalWrite(IN1, LOW);
         digitalWrite(IN2, LOW);
@@ -444,6 +443,7 @@ void stepMotor(int steps) {
 }
 
 void lcdTask(void* pvParameters){
+  Serial.println("IN LCDTASK");
   while(1) {
     LCDValue receivedValue;
     if (xQueueReceive(lcd_queue, &receivedValue, portMAX_DELAY) == pdTRUE){
@@ -479,15 +479,17 @@ void lcdTask(void* pvParameters){
           break;
       }
     }
+    vTaskDelay(pdMS_TO_TICKS(1000));
   }
 }
 
 
 void buzzerTask(void* pvParameters){
+  Serial.println("IN BUZZER TASK");
   while(1){
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     ledcWrite(BUZZER_PIN, 128);
-    vTaskDelay(pdMS_TO_TICKS(200));
+    vTaskDelay(pdMS_TO_TICKS(1000));
     ledcWrite(BUZZER_PIN, 0);
   }
 }
