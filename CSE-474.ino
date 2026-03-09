@@ -31,6 +31,12 @@
 #define TEMP_LIMIT 82
 #define HUMIDITY_LIMIT 70
 
+#define SOUND_LOW 500
+#define SOUND_HIGH 1000
+
+#define WATER_LOW 200
+#define WATER_HIGH 500
+
 // Buzzer
 #define BUZZER_PIN 15
 #define LEDC_RES 8
@@ -452,29 +458,41 @@ void lcdTask(void* pvParameters){
 
       switch (receivedValue.type) {
         case TEMP:
-          lcd.print("Temp: "); 
+          lcd.println("Temperature: "); 
           lcd.print(receivedValue.value);      
           lcd.print(" F");     
           break;
         case HUMIDITY:
-          lcd.print("Humidity: "); 
+          lcd.println("Humidity: "); 
           lcd.print(receivedValue.value);          
           lcd.print(" %"); 
           break;
         case WATER:
           lcd.print("Water: "); 
-          lcd.print(receivedValue.value);          
+          if (receivedValue.value < WATER_LOW){
+            lcd.print("Low");
+          } else if (receivedValue.value > WATER_HIGH){
+            lcd.print("High");
+          } else{
+            lcd.print("Medium");
+          }         
           break;
         case SOUND:
           lcd.print("Sound: "); 
-          lcd.print(receivedValue.value);        
+          if (receivedValue.value < SOUND_LOW){
+            lcd.print("Low");
+          } else if (receivedValue.value > SOUND_HIGH){
+            lcd.print("High");
+          } else{
+            lcd.print("Medium");
+          }
           break;
         case MOTION:
           lcd.print("Motion: "); 
           if (receivedValue.value >= 0.5){
             lcd.print("Movement Detected");
           } else{
-            lcd.print("No Movement");    
+            lcd.print("None");    
           }      
           break;
       }
