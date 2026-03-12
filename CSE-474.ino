@@ -10,12 +10,13 @@
 #include "esp_timer.h"
 #include <DHT.h>
 #include <ESP32Servo.h>
+#include <Stepper.h>
 
 // ================ Macros ================
 #define SDA_PIN 8
 #define SCL_PIN 9
-#define WINDOW_BUTTON_PIN  2
-#define FAN_BUTTON_PIN  3
+#define WINDOW_BUTTON_PIN  37
+#define FAN_BUTTON_PIN  38
 #define SENSOR_TIMER_INTERVAL 3000000
 #define MESSAGE_TIMER_INTERVAL 100000000
 #define DEBOUNCE_DELAY 200
@@ -23,30 +24,28 @@
 // Sensors
 #define DHT11_PIN 4
 #define DHTTYPE DHT11
-#define WATER_POWER_PIN 17
-#define WATER_SIGNAL_PIN 36
+#define WATER_SIGNAL_PIN 1
 #define SOUND_PIN 18
 #define MOTION_PIN 5
 #define HEAT_THRESHOLD 85
 #define TEMP_LIMIT 82
 #define HUMIDITY_LIMIT 70
 
-#define SOUND_LOW 500
-#define SOUND_HIGH 1000
-
 #define WATER_LOW 200
 #define WATER_HIGH 500
-
+#define SOUND_LOW 200
+#define SOUND_HIGH 300
 // Buzzer
 #define BUZZER_PIN 15
 #define LEDC_RES 8
 #define LEDC_FREQ 2000
 
 // Stepper motor
-#define IN1 13
-#define IN2 12
-#define IN3 10
-#define IN4 11
+#define IN1 10
+#define IN2 11
+#define IN3 12
+#define IN4 13
+#define STEPS_PER_REV 512
 
 // Servo motor
 #define SERVO_PIN 16
@@ -103,8 +102,8 @@ bool fan = false;
 bool window_mode = false; 
 bool window = false;
 
-int stepIndex = 0;   
-Servo windowServo; 
+Stepper fan_stepper(STEPS_PER_REV, IN1, IN2, IN3, IN4);
+Servo window_servo; 
 
 // ================ Prototypes ================
 void sensorTask(void* pvParameters);
@@ -181,7 +180,6 @@ void setup() {
   xSemaphore = xSemaphoreCreateMutex();
 
   // Sensors
-  pinMode(WATER_POWER_PIN, OUTPUT);
   pinMode(WATER_SIGNAL_PIN, INPUT);
   pinMode(SOUND_PIN, INPUT);
   pinMode(MOTION_PIN, INPUT);
@@ -200,13 +198,10 @@ void setup() {
   sensor_avg.water = 0;
 
   // Stepper motor
-  pinMode(IN1, OUTPUT);
-  pinMode(IN2, OUTPUT);
-  pinMode(IN3, OUTPUT);
-  pinMode(IN4, OUTPUT);
+  fan_stepper.setSpeed(30);
 
   // Server motor
-  windowServo.attach(SERVO_PIN);
+  window_servo.attach(SERVO_PIN);
 
   // Buzzer
   ledcAttach(BUZZER_PIN, LEDC_FREQ, LEDC_RES);
@@ -256,15 +251,12 @@ void sensorTask(void* pvParameters){
   SensorData local;
   while(1){
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-
-    digitalWrite(WATER_POWER_PIN, HIGH);
     vTaskDelay(pdMS_TO_TICKS(10));
     local.water = analogRead(WATER_SIGNAL_PIN);
-    digitalWrite(WATER_POWER_PIN, LOW);
 
     local.humidity = dht.readHumidity();
     local.temp= dht.readTemperature(true);
-    local.sound = digitalRead(SOUND_PIN);
+    local.sound = analogRead(SOUND_PIN);
     local.motion = digitalRead(MOTION_PIN); // should just be 0 or 1
 
     if (xSemaphoreTake(xSemaphore, portMAX_DELAY) == pdTRUE) {
@@ -348,12 +340,25 @@ void windowTask(void* pvParameters){
       xSemaphoreGive(xSemaphore);
     }
 
-    if ((!window_mode && curr_humidity >= HUMIDITY_LIMIT) || window) {
-      windowServo.write(WINDOW_OPEN);
+    if (window_mode) {
+      // manual mode
+      if (window) {
+        window_servo.write(WINDOW_OPEN);
+      } else {
+        window_servo.write(WINDOW_CLOSE);
+      }
     } else {
-      windowServo.write(WINDOW_CLOSE);
+      // auto mode
+      if (curr_humidity >= HUMIDITY_LIMIT) {
+        window = true;
+        window_servo.write(WINDOW_OPEN);
+      } else {
+        window = false;
+        window_servo.write(WINDOW_CLOSE);
+      }
     }
-    vTaskDelay(pdMS_TO_TICKS(100));
+
+    vTaskDelay(pdMS_TO_TICKS(1000));
   }
 }
 
@@ -366,85 +371,22 @@ void fanTask(void* pvParameters){
       xSemaphoreGive(xSemaphore);
     }
 
-    if ((!fan_mode && curr_temp >= TEMP_LIMIT) || fan) {
-      stepMotor(16);           
+    if (fan_mode) {
+      // manual mode
+      if (fan) {
+        fan_stepper.step(256);
+      }
+    } else {
+      // auto mode
+      if (curr_temp >= TEMP_LIMIT) {
+        fan = true;
+        fan_stepper.step(256);
+      } else {
+        fan = false;
+      }
     }
-    vTaskDelay(pdMS_TO_TICKS(1));
-  }
-}
 
-void stepMotor(int steps) {
-  for (int i = 0; i < steps; i++) {
-    
-    switch (stepIndex) {
-      case 0:
-        digitalWrite(IN1, LOW);
-        digitalWrite(IN2, LOW);
-        digitalWrite(IN3, LOW);
-        digitalWrite(IN4, HIGH);
-        break;
-
-      case 1:
-        digitalWrite(IN1, LOW);
-        digitalWrite(IN2, LOW);
-        digitalWrite(IN3, HIGH);
-        digitalWrite(IN4, HIGH);
-        break;
-
-      case 2:
-        digitalWrite(IN1, LOW);
-        digitalWrite(IN2, LOW);
-        digitalWrite(IN3, HIGH);
-        digitalWrite(IN4, LOW);
-        break;
-
-      case 3:
-        digitalWrite(IN1, LOW);
-        digitalWrite(IN2, HIGH);
-        digitalWrite(IN3, HIGH);
-        digitalWrite(IN4, LOW);
-        break;
-
-      case 4:
-        digitalWrite(IN1, LOW);
-        digitalWrite(IN2, HIGH);
-        digitalWrite(IN3, LOW);
-        digitalWrite(IN4, LOW);
-        break;
-
-      case 5:
-        digitalWrite(IN1, HIGH);
-        digitalWrite(IN2, HIGH);
-        digitalWrite(IN3, LOW);
-        digitalWrite(IN4, LOW);
-        break;
-
-      case 6:
-        digitalWrite(IN1, HIGH);
-        digitalWrite(IN2, LOW);
-        digitalWrite(IN3, LOW);
-        digitalWrite(IN4, LOW);
-        break;
-
-      case 7:
-        digitalWrite(IN1, HIGH);
-        digitalWrite(IN2, LOW);
-        digitalWrite(IN3, LOW);
-        digitalWrite(IN4, HIGH);
-        break;
-
-      default:
-        digitalWrite(IN1, LOW);
-        digitalWrite(IN2, LOW);
-        digitalWrite(IN3, LOW);
-        digitalWrite(IN4, LOW);
-        break;
-    }
-    stepIndex++;
-    if (stepIndex > 7) {
-      stepIndex = 0;
-    }
-    delayMicroseconds(800);
+    vTaskDelay(pdMS_TO_TICKS(10));
   }
 }
 
@@ -458,39 +400,52 @@ void lcdTask(void* pvParameters){
 
       switch (receivedValue.type) {
         case TEMP:
-          lcd.println("Temperature: "); 
+          lcd.print("Temperature: "); 
+          lcd.setCursor(0, 1);
           lcd.print(receivedValue.value);      
           lcd.print(" F");     
           break;
+        
         case HUMIDITY:
-          lcd.println("Humidity: "); 
+          lcd.print("Humidity: "); 
+          lcd.setCursor(0, 1);
           lcd.print(receivedValue.value);          
           lcd.print(" %"); 
           break;
+        
         case WATER:
           lcd.print("Water: "); 
+          Serial.println("Water");
+          Serial.println(receivedValue.value);
           if (receivedValue.value < WATER_LOW){
             lcd.print("Low");
-          } else if (receivedValue.value > WATER_HIGH){
+          } else if(receivedValue.value > WATER_HIGH){
             lcd.print("High");
-          } else{
+          } else {
             lcd.print("Medium");
           }         
           break;
+        
         case SOUND:
           lcd.print("Sound: "); 
+          Serial.println("Sound");
+          Serial.println(receivedValue.value);
           if (receivedValue.value < SOUND_LOW){
             lcd.print("Low");
-          } else if (receivedValue.value > SOUND_HIGH){
-            lcd.print("High");
-          } else{
-            lcd.print("Medium");
-          }
+          } else if(receivedValue.value > SOUND_HIGH) {
+            lcd.print("High");  
+          } else {
+            lcd.print("medium");   
+          }    
           break;
+        
         case MOTION:
           lcd.print("Motion: "); 
+          lcd.setCursor(0, 1);
+          Serial.println("Motion");
+          Serial.println(receivedValue.value);
           if (receivedValue.value >= 0.5){
-            lcd.print("Movement Detected");
+            lcd.print("Detected");
           } else{
             lcd.print("None");    
           }      
@@ -501,7 +456,6 @@ void lcdTask(void* pvParameters){
   }
 }
 
-
 void buzzerTask(void* pvParameters){
   Serial.println("IN BUZZER TASK");
   while(1){
@@ -509,10 +463,10 @@ void buzzerTask(void* pvParameters){
     ledcWrite(BUZZER_PIN, 128);
     vTaskDelay(pdMS_TO_TICKS(1000));
     ledcWrite(BUZZER_PIN, 0);
+    vTaskDelay(pdMS_TO_TICKS(1000));
   }
 }
 
 void loop() {
   // FreeRTOS handles everything
-
 }
