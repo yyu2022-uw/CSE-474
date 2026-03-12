@@ -198,10 +198,11 @@ void setup() {
   sensor_avg.water = 0;
 
   // Stepper motor
-  fan_stepper.setSpeed(30);
+  fan_stepper.setSpeed(20);
 
   // Server motor
   window_servo.attach(SERVO_PIN);
+  window_servo.write(WINDOW_CLOSE);
 
   // Buzzer
   ledcAttach(BUZZER_PIN, LEDC_FREQ, LEDC_RES);
@@ -374,18 +375,18 @@ void fanTask(void* pvParameters){
     if (fan_mode) {
       // manual mode
       if (fan) {
-        fan_stepper.step(256);
+        fan_stepper.step(128);
       }
     } else {
       // auto mode
       if (curr_temp >= TEMP_LIMIT) {
         fan = true;
-        fan_stepper.step(256);
+        fan_stepper.step(128);
       } else {
         fan = false;
       }
     }
-    vTaskDelay(pdMS_TO_TICKS(10));
+    vTaskDelay(pdMS_TO_TICKS(1));
   }
 }
 
