@@ -15,8 +15,8 @@
 // ================ Macros ================
 #define SDA_PIN 8
 #define SCL_PIN 9
-#define WINDOW_BUTTON_PIN  37
-#define FAN_BUTTON_PIN  38
+#define WINDOW_BUTTON_PIN  40
+#define FAN_BUTTON_PIN  41
 #define SENSOR_TIMER_INTERVAL 3000000
 #define MESSAGE_TIMER_INTERVAL 100000000
 #define DEBOUNCE_DELAY 200
@@ -31,8 +31,8 @@
 #define TEMP_LIMIT 82
 #define HUMIDITY_LIMIT 70
 
-#define WATER_LOW 200
-#define WATER_HIGH 500
+#define WATER_LOW 500
+#define WATER_HIGH 1000
 #define SOUND_LOW 200
 #define SOUND_HIGH 300
 // Buzzer
@@ -385,7 +385,6 @@ void fanTask(void* pvParameters){
         fan = false;
       }
     }
-
     vTaskDelay(pdMS_TO_TICKS(10));
   }
 }
