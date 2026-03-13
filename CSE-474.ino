@@ -28,8 +28,8 @@
 #define SOUND_PIN 18
 #define MOTION_PIN 5
 #define HEAT_THRESHOLD 85
-#define TEMP_LIMIT 20
-#define HUMIDITY_LIMIT 10
+#define TEMP_LIMIT 80
+#define HUMIDITY_LIMIT 70
 
 #define WATER_LOW 500
 #define WATER_HIGH 1000
@@ -90,7 +90,6 @@ TaskHandle_t sensorTaskHandle = nullptr;
 TaskHandle_t messageTaskHandle = nullptr;
 TaskHandle_t buzzerTaskHandle = nullptr;
 TaskHandle_t fanTaskHandle = nullptr;
-TaskHandle_t windowTaskHandle = nullptr;
 QueueHandle_t lcd_queue = nullptr;
 
 
@@ -101,7 +100,6 @@ SensorData sensor_avg;
 int sample_size = 0;
 BLECharacteristic *pCharacteristic = nullptr;
 
-volatile bool fan_button_pressed = false;
 volatile bool fan_mode = false; // False is auto mode
 volatile bool fan = false;
 volatile bool window_button_pressed = false;
@@ -125,7 +123,12 @@ void findMovingAverage(SensorData data);
 // ================ Functions ================
 void IRAM_ATTR handleWindowButtonInterrupt() { 
   if (millis() - lastWindowInterruptTime >= DEBOUNCE_DELAY) {
-    vTaskNotifyGiveFromISR(windowTaskHandle, NULL);
+    if (!window_mode) {
+      window_mode = true;
+      window = !window;
+    } else {
+      window_mode = false;
+    }
     lastWindowInterruptTime = millis();
   }
 }
@@ -222,7 +225,7 @@ void setup() {
   
   // Core 1
   xTaskCreatePinnedToCore(messageTask, "TaskMessage", 4096, NULL, 1, &messageTaskHandle, 1);
-  xTaskCreatePinnedToCore(windowTask, "TaskWindow", 4096, NULL, 1, &windowTaskHandle, 1);
+  xTaskCreatePinnedToCore(windowTask, "TaskWindow", 4096, NULL, 1, NULL, 1);
   xTaskCreatePinnedToCore(fanTask, "TaskFan", 4096, NULL, 1, &fanTaskHandle, 1);
 
   // Sensor timer
@@ -327,25 +330,15 @@ void findMovingAverage(SensorData data) {
 }
 
 void windowTask(void* pvParameters){
+  Serial.println("IN WINDOW TASK");
   float curr_humidity;
-
   while(1) {
-    if (ulTaskNotifyTake(pdTRUE, 0) > 0) {
-      if (!window_mode) {
-        window_mode = true;
-        window = !window;
-      } else {
-        window_mode = false;
-      }
-    }
-    
     if (xSemaphoreTake(xSemaphore, portMAX_DELAY) == pdTRUE) {
       curr_humidity = sensor_values.humidity;
       xSemaphoreGive(xSemaphore);
     }
 
     if (window_mode) {
-      Serial.println("window mode: manual");
       // manual mode
       if (window) {
         window_servo.write(WINDOW_OPEN);
@@ -354,15 +347,16 @@ void windowTask(void* pvParameters){
       }
     } else {
       // auto mode
-      Serial.println("window mode: auto");
       if (curr_humidity >= HUMIDITY_LIMIT) {
+        window = true;
         window_servo.write(WINDOW_OPEN);
       } else {
+        window = false;
         window_servo.write(WINDOW_CLOSE);
       }
     }
 
-    vTaskDelay(pdMS_TO_TICKS(500));
+    vTaskDelay(pdMS_TO_TICKS(1000));
   }
 }
 
