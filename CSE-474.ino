@@ -28,8 +28,8 @@
 #define SOUND_PIN 18
 #define MOTION_PIN 5
 #define HEAT_THRESHOLD 85
-#define TEMP_LIMIT 82
-#define HUMIDITY_LIMIT 70
+#define TEMP_LIMIT 20
+#define HUMIDITY_LIMIT 10
 
 #define WATER_LOW 500
 #define WATER_HIGH 1000
@@ -89,7 +89,11 @@ DHT dht(DHT11_PIN, DHTTYPE);
 TaskHandle_t sensorTaskHandle = nullptr;
 TaskHandle_t messageTaskHandle = nullptr;
 TaskHandle_t buzzerTaskHandle = nullptr;
+TaskHandle_t fanTaskHandle = nullptr;
+TaskHandle_t windowTaskHandle = nullptr;
 QueueHandle_t lcd_queue = nullptr;
+
+
 SemaphoreHandle_t xSemaphore = nullptr;
 
 SensorData sensor_values;
@@ -97,10 +101,12 @@ SensorData sensor_avg;
 int sample_size = 0;
 BLECharacteristic *pCharacteristic = nullptr;
 
-bool fan_mode = false; // False is auto mode
-bool fan = false;
-bool window_mode = false; 
-bool window = false;
+volatile bool fan_button_pressed = false;
+volatile bool fan_mode = false; // False is auto mode
+volatile bool fan = false;
+volatile bool window_button_pressed = false;
+volatile bool window_mode = false; 
+volatile bool window = false;
 
 Stepper fan_stepper(STEPS_PER_REV, IN1, IN2, IN3, IN4);
 Servo window_servo; 
@@ -119,24 +125,14 @@ void findMovingAverage(SensorData data);
 // ================ Functions ================
 void IRAM_ATTR handleWindowButtonInterrupt() { 
   if (millis() - lastWindowInterruptTime >= DEBOUNCE_DELAY) {
-    if (!window_mode) {
-      window_mode = true;
-      window = !window;
-    } else {
-      window_mode = false;
-    }
+    vTaskNotifyGiveFromISR(windowTaskHandle, NULL);
     lastWindowInterruptTime = millis();
   }
 }
 
 void IRAM_ATTR handleFanButtonInterrupt() { 
   if (millis() - lastFanInterruptTime >= DEBOUNCE_DELAY) {
-  if (!fan_mode) {
-    fan_mode = true;
-    fan = !fan;
-  } else {
-    fan_mode = false;
-  }
+    vTaskNotifyGiveFromISR(fanTaskHandle, NULL);
     lastFanInterruptTime = millis();
   }
 }
@@ -198,7 +194,7 @@ void setup() {
   sensor_avg.water = 0;
 
   // Stepper motor
-  fan_stepper.setSpeed(20);
+  fan_stepper.setSpeed(30);
 
   // Server motor
   window_servo.attach(SERVO_PIN);
@@ -226,8 +222,8 @@ void setup() {
   
   // Core 1
   xTaskCreatePinnedToCore(messageTask, "TaskMessage", 4096, NULL, 1, &messageTaskHandle, 1);
-  xTaskCreatePinnedToCore(windowTask, "TaskWindow", 4096, NULL, 1, NULL, 1);
-  xTaskCreatePinnedToCore(fanTask, "TaskFan", 4096, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(windowTask, "TaskWindow", 4096, NULL, 1, &windowTaskHandle, 1);
+  xTaskCreatePinnedToCore(fanTask, "TaskFan", 4096, NULL, 1, &fanTaskHandle, 1);
 
   // Sensor timer
   esp_timer_create_args_t sensor_timer_args = {
@@ -248,7 +244,6 @@ void setup() {
 }
 
 void sensorTask(void* pvParameters){
-  Serial.println("IN SENSORTASK");
   SensorData local;
   while(1){
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -294,7 +289,6 @@ void sensorTask(void* pvParameters){
 }
 
 void messageTask(void* pvParameters){
-  Serial.println("IN MESSAGE TASK");
   SensorData avg;
   while(1) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -333,15 +327,25 @@ void findMovingAverage(SensorData data) {
 }
 
 void windowTask(void* pvParameters){
-  Serial.println("IN WINDOW TASK");
   float curr_humidity;
+
   while(1) {
+    if (ulTaskNotifyTake(pdTRUE, 0) > 0) {
+      if (!window_mode) {
+        window_mode = true;
+        window = !window;
+      } else {
+        window_mode = false;
+      }
+    }
+    
     if (xSemaphoreTake(xSemaphore, portMAX_DELAY) == pdTRUE) {
       curr_humidity = sensor_values.humidity;
       xSemaphoreGive(xSemaphore);
     }
 
     if (window_mode) {
+      Serial.println("window mode: manual");
       // manual mode
       if (window) {
         window_servo.write(WINDOW_OPEN);
@@ -350,23 +354,31 @@ void windowTask(void* pvParameters){
       }
     } else {
       // auto mode
+      Serial.println("window mode: auto");
       if (curr_humidity >= HUMIDITY_LIMIT) {
-        window = true;
         window_servo.write(WINDOW_OPEN);
       } else {
-        window = false;
         window_servo.write(WINDOW_CLOSE);
       }
     }
 
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    vTaskDelay(pdMS_TO_TICKS(500));
   }
 }
 
 void fanTask(void* pvParameters){
-  Serial.println("IN FAN TASK");
   float curr_temp;
+
   while(1) {
+    if (ulTaskNotifyTake(pdTRUE, 0) > 0) {
+      if (!fan_mode) {
+        fan_mode = true;   
+        fan = !fan;        
+      } else {
+        fan_mode = false;  
+      }
+    }
+
     if (xSemaphoreTake(xSemaphore, portMAX_DELAY) == pdTRUE) {
       curr_temp = sensor_values.temp;
       xSemaphoreGive(xSemaphore);
@@ -374,24 +386,23 @@ void fanTask(void* pvParameters){
 
     if (fan_mode) {
       // manual mode
+      Serial.println("fan mode: manual");
       if (fan) {
-        fan_stepper.step(128);
+        fan_stepper.step(256);
       }
     } else {
       // auto mode
+      Serial.println("fan mode: auto");
       if (curr_temp >= TEMP_LIMIT) {
-        fan = true;
-        fan_stepper.step(128);
-      } else {
-        fan = false;
+        fan_stepper.step(256);
       }
     }
-    vTaskDelay(pdMS_TO_TICKS(1));
+
+    vTaskDelay(pdMS_TO_TICKS(10));
   }
 }
 
 void lcdTask(void* pvParameters){
-  Serial.println("IN LCDTASK");
   while(1) {
     LCDValue receivedValue;
     if (xQueueReceive(lcd_queue, &receivedValue, portMAX_DELAY) == pdTRUE){
@@ -402,6 +413,8 @@ void lcdTask(void* pvParameters){
         case TEMP:
           lcd.print("Temperature: "); 
           lcd.setCursor(0, 1);
+          Serial.println("Temp");
+          Serial.println(receivedValue.value);
           lcd.print(receivedValue.value);      
           lcd.print(" F");     
           break;
@@ -409,6 +422,8 @@ void lcdTask(void* pvParameters){
         case HUMIDITY:
           lcd.print("Humidity: "); 
           lcd.setCursor(0, 1);
+          Serial.println("Humidity");
+          Serial.println(receivedValue.value);
           lcd.print(receivedValue.value);          
           lcd.print(" %"); 
           break;
@@ -457,7 +472,6 @@ void lcdTask(void* pvParameters){
 }
 
 void buzzerTask(void* pvParameters){
-  Serial.println("IN BUZZER TASK");
   while(1){
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     ledcWrite(BUZZER_PIN, 128);
