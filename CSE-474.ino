@@ -382,17 +382,17 @@ void fanTask(void* pvParameters){
       // manual mode
       Serial.println("fan mode: manual");
       if (fan) {
-        fan_stepper.step(256);
+        fan_stepper.step(8);
       }
     } else {
       // auto mode
       Serial.println("fan mode: auto");
       if (curr_temp >= TEMP_LIMIT) {
-        fan_stepper.step(256);
+        fan_stepper.step(8);
       }
     }
 
-    vTaskDelay(pdMS_TO_TICKS(10));
+    vTaskDelay(pdMS_TO_TICKS(2));
   }
 }
 
