@@ -152,7 +152,6 @@ void IRAM_ATTR messageTimerInterrupt(void* arg) {
 void setup() {
   // Serial
   Serial.begin(115200);
-  Serial.println("Begin");
 
   // BLE
   BLEDevice::init("MyESP32");
@@ -330,7 +329,6 @@ void findMovingAverage(SensorData data) {
 }
 
 void windowTask(void* pvParameters){
-  Serial.println("IN WINDOW TASK");
   float curr_humidity;
   while(1) {
     if (xSemaphoreTake(xSemaphore, portMAX_DELAY) == pdTRUE) {
@@ -380,13 +378,11 @@ void fanTask(void* pvParameters){
 
     if (fan_mode) {
       // manual mode
-      Serial.println("fan mode: manual");
       if (fan) {
         fan_stepper.step(8);
       }
     } else {
       // auto mode
-      Serial.println("fan mode: auto");
       if (curr_temp >= TEMP_LIMIT) {
         fan_stepper.step(8);
       }
@@ -407,8 +403,6 @@ void lcdTask(void* pvParameters){
         case TEMP:
           lcd.print("Temperature: "); 
           lcd.setCursor(0, 1);
-          Serial.println("Temp");
-          Serial.println(receivedValue.value);
           lcd.print(receivedValue.value);      
           lcd.print(" F");     
           break;
@@ -416,16 +410,12 @@ void lcdTask(void* pvParameters){
         case HUMIDITY:
           lcd.print("Humidity: "); 
           lcd.setCursor(0, 1);
-          Serial.println("Humidity");
-          Serial.println(receivedValue.value);
           lcd.print(receivedValue.value);          
           lcd.print(" %"); 
           break;
         
         case WATER:
           lcd.print("Water: "); 
-          Serial.println("Water");
-          Serial.println(receivedValue.value);
           if (receivedValue.value < WATER_LOW){
             lcd.print("Low");
           } else if(receivedValue.value > WATER_HIGH){
@@ -437,8 +427,6 @@ void lcdTask(void* pvParameters){
         
         case SOUND:
           lcd.print("Sound: "); 
-          Serial.println("Sound");
-          Serial.println(receivedValue.value);
           if (receivedValue.value < SOUND_LOW){
             lcd.print("Low");
           } else if(receivedValue.value > SOUND_HIGH) {
@@ -451,8 +439,6 @@ void lcdTask(void* pvParameters){
         case MOTION:
           lcd.print("Motion: "); 
           lcd.setCursor(0, 1);
-          Serial.println("Motion");
-          Serial.println(receivedValue.value);
           if (receivedValue.value >= 0.5){
             lcd.print("Detected");
           } else{
