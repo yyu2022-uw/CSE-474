@@ -116,7 +116,6 @@ void buzzerTask(void* pvParameters);
 void fanTask(void* pvParameters);
 void windowTask(void* pvParameters);
 void lcdTask(void* pvParameters);
-void stepMotor(int steps);
 void findMovingAverage(SensorData data);
 
 
@@ -150,9 +149,6 @@ void IRAM_ATTR messageTimerInterrupt(void* arg) {
 
 
 void setup() {
-  // Serial
-  Serial.begin(115200);
-
   // BLE
   BLEDevice::init("MyESP32");
   BLEServer *pServer = BLEDevice::createServer();
@@ -174,7 +170,7 @@ void setup() {
   lcd.backlight();
   lcd.clear();
   
-  // Semaphore
+  // Mutex
   xSemaphore = xSemaphoreCreateMutex();
 
   // Sensors
