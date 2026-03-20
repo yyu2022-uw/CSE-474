@@ -1,9 +1,8 @@
 # CSE-474
 Smart Pet Monitoring System
 
-**Authors:**
-Julia Yu, 2233928
-Giannah Donahoe, 2362427
+**Authors:** Julia Yu, Giannah Donahoe
+
 Date: 3/19/2026
 
 **Introduction**
